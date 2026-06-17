@@ -359,31 +359,63 @@ function normalizeSkill(value: unknown): SkillSummary | null {
   }
 }
 
-async function fetchClaudeSkills(): Promise<Array<SkillSummary>> {
-  const capabilities = getCapabilities()
-  const headers: Record<string, string> = {}
-  if (BEARER_TOKEN) headers['Authorization'] = `Bearer ${BEARER_TOKEN}`
-
-  const response = capabilities.dashboard.available
-    ? await dashboardFetch('/api/skills')
-    : await fetch(`${CLAUDE_API}/api/skills`, { headers })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(body || `Claude skills request failed (${response.status})`)
+async function readLocalSkills(): Promise<Array<SkillSummary>> {
+  const root = getSkillsDir()
+  const skills: Array<SkillSummary> = []
+  let categoryEntries: Array<{ name: string; isDirectory: () => boolean }>
+  try {
+    categoryEntries = (await fs.readdir(root, { withFileTypes: true })) as any
+  } catch {
+    return skills
   }
+  for (const cat of categoryEntries) {
+    if (!cat.isDirectory() || cat.name.startsWith('.')) continue
+    const catPath = path.join(root, cat.name)
+    let skillEntries: Array<{ name: string; isDirectory: () => boolean }>
+    try {
+      skillEntries = (await fs.readdir(catPath, { withFileTypes: true })) as any
+    } catch {
+      continue
+    }
+    for (const skill of skillEntries) {
+      if (!skill.isDirectory() || skill.name.startsWith('.')) continue
+      const fullPath = path.join(catPath, skill.name)
+      try {
+        const raw = await fs.readFile(path.join(fullPath, 'SKILL.md'), 'utf-8')
+        const fmEnd = raw.indexOf('\n---', 4)
+        const fm = fmEnd > 0 ? raw.slice(4, fmEnd) : ''
+        const nameMatch = fm.match(/^name:\s*(.+?)\s*$/m)
+        const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m)
+        const authorMatch = fm.match(/^author:\s*(.+?)\s*$/m)
+        const tagsMatch = fm.match(/^(?:tags|metadata\.hermes\.tags):\s*\[(.+?)\]/m)
+        const name = nameMatch?.[1]?.replace(/^["']|["']$/g, '') || skill.name
+        const description = descMatch?.[1]?.replace(/^["']|["']$/g, '') || ''
+        const author = authorMatch?.[1]?.trim() || ''
+        const tags = tagsMatch?.[1]?.split(',').map(t => t.trim().replace(/^["']|["']$/g, '')) || []
+        const normalized = normalizeSkill({
+          id: skill.name,
+          slug: skill.name,
+          name,
+          description,
+          author,
+          tags,
+          category: cat.name,
+          sourcePath: fullPath,
+          installed: true,
+          enabled: true,
+          content: raw.slice(0, 500),
+        })
+        if (normalized) skills.push(normalized)
+      } catch { /* skip skills without SKILL.md */ }
+    }
+  }
+  return skills
+}
 
-  const payload = (await response.json()) as unknown
-  const items = Array.isArray(payload)
-    ? payload
-    : Array.isArray(asRecord(payload).items)
-      ? (asRecord(payload).items as Array<unknown>)
-      : Array.isArray(asRecord(payload).skills)
-        ? (asRecord(payload).skills as Array<unknown>)
-        : []
-
-  return items
-    .map((entry) => normalizeSkill(entry))
-    .filter((entry): entry is SkillSummary => entry !== null)
+async function fetchClaudeSkills(): Promise<Array<SkillSummary>> {
+  // Read skills directly from filesystem to avoid circular self-call
+  // (this workspace IS the dashboard, so dashboardFetch('/api/skills') would loop)
+  return readLocalSkills()
 }
 
 function matchesSearch(skill: SkillSummary, rawSearch: string): boolean {

@@ -285,6 +285,12 @@ export async function fetchDashboardToken(options?: {
   if (!force && dashboardTokenPromise) return dashboardTokenPromise
 
   dashboardTokenPromise = (async () => {
+    // When workspace IS the dashboard (no separate dashboard process),
+    // use the gateway bearer token directly for authenticated API calls.
+    if (BEARER_TOKEN) {
+      dashboardTokenCache = BEARER_TOKEN
+      return BEARER_TOKEN
+    }
     // Dashboard injects the session token inline on `/` (root), not on
     // `/index.html` which serves the raw Vite-built HTML without the token.
     const res = await fetch(`${CLAUDE_DASHBOARD_URL}/`, {

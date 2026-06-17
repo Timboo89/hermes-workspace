@@ -112,7 +112,14 @@ export const Route = createFileRoute('/api/mcp')({
         if (!isAuthenticated(request)) {
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
-        const capabilities = await ensureGatewayProbed()
+        // Use sync cache to avoid deadlock when probeMcp() calls us
+        // during the initial gateway probe (circular self-call).
+        // Return 503 so the probe correctly detects "no native MCP"
+        // and falls through to mcpFallback (config-based) path.
+        const capabilities = getCapabilities()
+        if (!capabilities.probed) {
+          return json({ error: 'probe in progress' }, { status: 503 })
+        }
         if (!capabilities.mcp && !capabilities.mcpFallback) {
           return json(unavailableListPayload())
         }
