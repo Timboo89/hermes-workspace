@@ -2,6 +2,7 @@ import {
   dashboardFetch,
   CLAUDE_DASHBOARD_URL,
 } from './gateway-capabilities'
+import { readLocalConfig, writeLocalConfig } from './local-config'
 
 export type DashboardSession = {
   id: string
@@ -193,7 +194,13 @@ export async function toggleSkill(
 }
 
 export async function getConfig(): Promise<Record<string, unknown>> {
-  return dashboardJson('/api/config')
+  try {
+    const res = await dashboardJson('/api/config')
+    return res
+  } catch {
+    // Self-hosted fallback: read config.yaml directly
+    return { ok: true, config: readLocalConfig() }
+  }
 }
 
 export async function getConfigSchema(): Promise<{
@@ -273,11 +280,17 @@ export async function saveConfig(
     // The dashboard will reject or overwrite — this is no worse than the old
     // behaviour, and the happy path (GET working) is the common case.
   }
-  return dashboardJson('/api/config', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: merged }),
-  })
+  try {
+    return await dashboardJson('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: merged }),
+    })
+  } catch {
+    // Self-hosted fallback: write config.yaml directly
+    writeLocalConfig(merged)
+    return { ok: true }
+  }
 }
 
 export async function saveConfigRaw(

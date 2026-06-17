@@ -1,3 +1,4 @@
+import { readLocalConfig } from './local-config'
 /**
  * Hermes Agent FastAPI Client
  *
@@ -522,7 +523,12 @@ export async function getConfig(): Promise<ClaudeConfig> {
     }
     return res.json() as Promise<ClaudeConfig>
   }
-  return claudeGet<ClaudeConfig>('/api/config')
+  try {
+    return await claudeGet<ClaudeConfig>('/api/config')
+  } catch {
+    // Self-hosted fallback: read config.yaml directly
+    return { ok: true, config: readLocalConfig() } as unknown as ClaudeConfig
+  }
 }
 
 export async function patchConfig(

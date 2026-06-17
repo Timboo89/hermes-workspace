@@ -333,10 +333,28 @@ function withDashboardBase(path: string): string {
   return `${CLAUDE_DASHBOARD_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/**
+ * Self-hosted detection: when CLAUDE_DASHBOARD_URL points to our own port (9119),
+ * the workspace IS the dashboard. All dashboardFetch calls are redirected to
+ * the gateway (CLAUDE_API) with Bearer auth to avoid self-loop deadlocks.
+ */
+const isSelfHosted = CLAUDE_DASHBOARD_URL.includes(':9119')
+
 export async function dashboardFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  // Self-hosted: ALL dashboardFetch calls go to gateway to avoid self-loop.
+  // Local workspace routes handle their own data directly (skills, config, mcp).
+  if (isSelfHosted) {
+    const gwUrl = `${CLAUDE_API}${path.startsWith('/') ? path : `/${path}`}`
+    const headers = new Headers(init.headers)
+    if (BEARER_TOKEN && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${BEARER_TOKEN}`)
+    }
+    return fetch(gwUrl, { ...init, headers })
+  }
+
   const requestPath = withDashboardBase(path)
   const method = (init.method || 'GET').toUpperCase()
   const doFetch = async (forceToken = false) => {
@@ -565,6 +583,10 @@ async function probeMcpConfigKey(): Promise<boolean> {
 }
 
 async function probeDashboard(): Promise<{ available: boolean; url: string }> {
+  // Self-hosted: we ARE the dashboard, don't probe ourselves
+  if (isSelfHosted) {
+    return { available: false, url: CLAUDE_DASHBOARD_URL }
+  }
   try {
     const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
@@ -847,15 +869,17 @@ export async function probeGateway(options?: {
       probed: true,
       sessions: dashboard.available || legacySessions,
       enhancedChat,
-      skills: dashboard.available || legacySkills,
+      // Self-hosted: workspace provides skills, config, mcp locally via its own routes.
+      // Don't depend on dashboard.available (which would self-loop).
+      skills: isSelfHosted || dashboard.available || legacySkills,
       // Memory is always available: workspace reads $HERMES_HOME/MEMORY.md +
       // memory/*.md + memories/*.md directly from the local filesystem.
       // No remote gateway endpoint is required.
       memory: true,
-      config: dashboard.available || legacyConfig,
-      jobs: dashboard.available || legacyJobs,
+      config: isSelfHosted || dashboard.available || legacyConfig,
+      jobs: isSelfHosted || dashboard.available || legacyJobs,
       mcp,
-      mcpFallback,
+      mcpFallback: isSelfHosted || mcpFallback,
       conductor,
       kanban,
       dashboard,
