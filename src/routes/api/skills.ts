@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
@@ -359,9 +360,21 @@ function normalizeSkill(value: unknown): SkillSummary | null {
   }
 }
 
+function getDisabledSkills(): Set<string> {
+  try {
+    const configPath = path.join(process.env.HOME || '/opt/data', '.hermes/config.yaml')
+    const raw = readFileSync(configPath, 'utf-8')
+    const match = raw.match(/skills:[\s\S]*?disabled:\n((?:\s+-\s+.+\n?)*)/)
+    if (!match) return new Set()
+    const items = match[1].match(/^\s+-\s+(.+)$/gm) || []
+    return new Set(items.map((line: string) => line.replace(/^\s+-\s+/, '').trim()))
+  } catch { return new Set() }
+}
+
 async function readLocalSkills(): Promise<Array<SkillSummary>> {
   const root = getSkillsDir()
   const skills: Array<SkillSummary> = []
+  const disabledSet = getDisabledSkills()
   let categoryEntries: Array<{ name: string; isDirectory: () => boolean }>
   try {
     categoryEntries = (await fs.readdir(root, { withFileTypes: true })) as any
@@ -402,7 +415,7 @@ async function readLocalSkills(): Promise<Array<SkillSummary>> {
           category: cat.name,
           sourcePath: fullPath,
           installed: true,
-          enabled: true,
+          enabled: !disabledSet.has(skill.name),
           content: raw.slice(0, 500),
         })
         if (normalized) skills.push(normalized)
@@ -629,6 +642,25 @@ export const Route = createFileRoute('/api/skills')({
             return json(result, { status: response.status })
           }
 
+          // Self-hosted: handle toggle locally via config.yaml
+          if (action === 'toggle') {
+            const { readLocalConfig, writeLocalConfig } = await import('../../server/local-config')
+            const config = readLocalConfig()
+            const skillsCfg = (config.skills || {}) as Record<string, unknown>
+            const disabled = new Set<string>((skillsCfg.disabled as string[]) || [])
+            const skillName = (payload.name as string) || ''
+            if (payload.enabled) {
+              disabled.delete(skillName)
+            } else {
+              disabled.add(skillName)
+            }
+            skillsCfg.disabled = [...disabled].sort()
+            config.skills = skillsCfg
+            writeLocalConfig(config)
+            return json({ ok: true, name: skillName, enabled: Boolean(payload.enabled) })
+          }
+
+          // Fallback: try gateway for install/uninstall
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',
           }
