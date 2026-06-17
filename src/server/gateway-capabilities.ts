@@ -623,9 +623,11 @@ async function probeKanban(dashboardAvailable: boolean): Promise<boolean> {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
     if (res.status === 404 || res.status === 405) return false
-    // The plugin route is unauthenticated by design (loopback-only), so
-    // 200 is the normal success. Some auth setups may return 401 — still
-    // means the route exists.
+    // Guard against SPA fallback: if the response is HTML instead of JSON,
+    // the route doesn't actually exist (self-hosted workspace serves HTML
+    // for unknown paths). Same fix as probeConductor.
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!contentType.toLowerCase().includes('application/json')) return false
     return true
   } catch {
     return false

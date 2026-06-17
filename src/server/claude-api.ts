@@ -28,6 +28,20 @@ import {
 const _authHeaders = (): Record<string, string> =>
   BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
 
+/**
+ * Self-hosted detection: when the workspace IS the dashboard (same host:port),
+ * dashboard.available is true but calling dashboardFetch would self-loop.
+ * Always use gateway (claudeGet/claudePost) in self-hosted mode.
+ */
+function useDashboardApi(): boolean {
+  const caps = getCapabilities()
+  if (!caps.dashboard.available) return false
+  // Self-hosted: dashboard URL points to ourselves (port 9119)
+  const dashUrl = caps.dashboard.url || ''
+  if (dashUrl.includes(':9119')) return false
+  return true
+}
+
 console.log(`[claude-api] Configured API: ${CLAUDE_API}`)
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -129,23 +143,17 @@ export async function listSessions(
   limit = 50,
   offset = 0,
 ): Promise<Array<ClaudeSession>> {
-  if (getCapabilities().dashboard.available) {
-    const resp = await listDashboardSessions(limit, offset)
-    return resp.sessions as Array<ClaudeSession>
-  }
+  // Always use gateway path — dashboard path self-loops when workspace IS the dashboard
   const resp = await claudeGet<{
     items?: Array<ClaudeSession>
     data?: Array<ClaudeSession>
     total?: number
   }>(`/api/sessions?limit=${limit}&offset=${offset}`)
-  // The gateway (OpenAI-compat) returns { object: 'list', data: [...] }, while the
-  // dashboard / older gateway shape uses { items: [...] }. Accept either, and never
-  // return undefined (callers .map over this).
   return resp.items ?? resp.data ?? []
 }
 
 export async function getSession(sessionId: string): Promise<ClaudeSession> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     return getDashboardSession(sessionId) as Promise<ClaudeSession>
   }
   const resp = await claudeGet<{ session: ClaudeSession }>(
@@ -159,7 +167,7 @@ export async function createSession(opts?: {
   title?: string
   model?: string
 }): Promise<ClaudeSession> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     const resp = await createDashboardSession(opts || {})
     return resp.session as ClaudeSession
   }
@@ -174,7 +182,7 @@ export async function updateSession(
   sessionId: string,
   updates: { title?: string },
 ): Promise<ClaudeSession> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     const resp = await updateDashboardSession(sessionId, updates)
     return resp.session as ClaudeSession
   }
@@ -186,7 +194,7 @@ export async function updateSession(
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     await deleteDashboardSession(sessionId)
     return
   }
@@ -196,7 +204,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export async function getMessages(
   sessionId: string,
 ): Promise<Array<ClaudeMessage>> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     const resp = await getDashboardSessionMessages(sessionId)
     return resp.messages as Array<ClaudeMessage>
   }
@@ -215,7 +223,7 @@ export async function searchSessions(
   query: string,
   limit = 20,
 ): Promise<{ query?: string; count?: number; results: Array<unknown> }> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     return searchDashboardSessions(query)
   }
   return claudeGet(
@@ -226,7 +234,7 @@ export async function searchSessions(
 export async function forkSession(
   sessionId: string,
 ): Promise<{ session: ClaudeSession; forked_from: string }> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     return forkDashboardSession(sessionId) as Promise<{
       session: ClaudeSession
       forked_from: string
@@ -506,7 +514,7 @@ export async function getSkillCategories(): Promise<unknown> {
 // ── Config ───────────────────────────────────────────────────────
 
 export async function getConfig(): Promise<ClaudeConfig> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     const res = await dashboardFetch('/api/config')
     if (!res.ok) {
       const body = await res.text().catch(() => '')
@@ -520,7 +528,7 @@ export async function getConfig(): Promise<ClaudeConfig> {
 export async function patchConfig(
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  if (getCapabilities().dashboard.available) {
+  if (useDashboardApi()) {
     const res = await dashboardFetch('/api/config', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

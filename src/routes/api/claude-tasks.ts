@@ -33,15 +33,18 @@ export const Route = createFileRoute('/api/claude-tasks')({
           return jsonResponse({ error: 'Unauthorized' }, 401)
         }
 
-        const url = new URL(request.url)
-        const tasks = await listClaudeTasks({
-          column: url.searchParams.get('column'),
-          assignee: url.searchParams.get('assignee'),
-          priority: url.searchParams.get('priority'),
-          includeDone: url.searchParams.get('include_done') === 'true',
-        })
-
-        return jsonResponse({ tasks })
+        try {
+          const url = new URL(request.url)
+          const tasks = await listClaudeTasks({
+            column: url.searchParams.get('column'),
+            assignee: url.searchParams.get('assignee'),
+            priority: url.searchParams.get('priority'),
+            includeDone: url.searchParams.get('include_done') === 'true',
+          })
+          return jsonResponse({ tasks })
+        } catch (err) {
+          return jsonResponse({ tasks: [], error: err instanceof Error ? err.message : 'Failed to load tasks' }, 200)
+        }
       },
 
       POST: async ({ request }) => {
